@@ -1,6 +1,6 @@
 """Model context protocol implementation for intelligent task routing."""
 
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Any
 from dataclasses import dataclass
 
 from ..core.interfaces import ModelContextProtocol, ModelSelection, ExecutionPlan, ModelRegistry
@@ -99,31 +99,30 @@ class ModelContextProtocolImpl(ModelContextProtocol):
             reasoning=decision.reasoning
         )
     
-    async def select_fallback(self, failed_model: str, subtask: Subtask) -> ModelSelection:
+    async def select_fallback(self, failed_model: str, subtask: Subtask, failure_context: Optional[Dict[str, Any]] = None) -> ModelSelection:
         """Select a fallback model when the primary model fails.
         
         Args:
             failed_model: ID of the model that failed
             subtask: The subtask that needs a fallback model
+            failure_context: Optional context about the failure
             
         Returns:
             ModelSelection: The fallback model selection
         """
-        # Check if we have a pre-built fallback chain
-        if failed_model in self._fallback_chains:
+        # If no context provided, try to use pre-built chain but with lower confidence
+        if not failure_context and failed_model in self._fallback_chains:
             fallback_candidates = self._fallback_chains[failed_model]
-            
-            # Try each fallback in order
             for fallback_id in fallback_candidates:
                 fallback_model = self.model_registry.get_model_by_id(fallback_id)
                 if fallback_model:
                     return ModelSelection(
                         model_id=fallback_id,
-                        confidence=0.7,  # Lower confidence for fallback
-                        reasoning=f"Fallback selection after {failed_model} failed"
+                        confidence=0.6,
+                        reasoning=f"Selected {fallback_id} from pre-built fallback chain (no failure context)"
                     )
-        
-        # If no pre-built chain, do fresh routing excluding the failed model
+
+        # Do fresh routing with failure context
         if not subtask.task_type:
             raise ValueError("Subtask must have a task type for fallback routing")
         
@@ -135,21 +134,65 @@ class ModelContextProtocolImpl(ModelContextProtocol):
         if not available_models:
             raise ValueError(f"No fallback models available for task type {subtask.task_type}")
         
-        # Score remaining models
+        # Score remaining models with failure context
         scored_models = []
         for model in available_models:
-            score = self._score_model_for_subtask(model, subtask)
+            score = self._score_model_for_fallback(model, subtask, failed_model, failure_context)
             scored_models.append((model, score))
         
         # Sort by score and select best
         scored_models.sort(key=lambda x: x[1], reverse=True)
         best_model, best_score = scored_models[0]
         
+        reasoning = f"Fallback selection after {failed_model} failed. "
+        if failure_context:
+            reasoning += f"Failure type: {failure_context.get('failure_type', 'unknown')}. "
+        reasoning += f"Chose {best_model.get_model_id()} based on score {best_score:.2f}"
+        
         return ModelSelection(
             model_id=best_model.get_model_id(),
-            confidence=min(best_score * 0.8, 1.0),  # Reduced confidence for fallback
-            reasoning=f"Fallback selection after {failed_model} failed, chose based on score {best_score:.2f}"
+            confidence=min(best_score * 0.9, 1.0),
+            reasoning=reasoning
         )
+
+    def _score_model_for_fallback(self, model, subtask: Subtask, failed_model: str, context: Optional[Dict[str, Any]]) -> float:
+        """Score a model specifically for fallback considering the reason for original failure."""
+        base_score = self._score_model_for_subtask(model, subtask)
+        
+        if not context:
+            return base_score
+            
+        failure_type = context.get("failure_type")
+        model_id = model.get_model_id()
+        
+        # Access capabilities for tag checking
+        try:
+            capabilities = self.model_registry.get_model_capabilities(model_id)
+            failed_model_caps = self.model_registry.get_model_capabilities(failed_model)
+        except KeyError:
+            return base_score * 0.5
+
+        # Rule 1: Avoid similar safety filter profiles if content filter failed
+        if "content_filter" in str(context.get("error_message", "")).lower() or failure_type == "validation_error":
+            if "strict-safety" in capabilities.tags and "strict-safety" in failed_model_caps.tags:
+                base_score *= 0.5 # Penalize if both have strict safety
+            elif "relaxed-safety" in capabilities.tags:
+                base_score *= 1.2 # Prefer if this one is known to be more relaxed
+
+        # Rule 2: If reasoning was insufficient, prefer high-reasoning models
+        if "reasoning" in str(context.get("error_message", "")).lower() or subtask.task_type == TaskType.REASONING:
+            if "high-reasoning" in capabilities.tags:
+                base_score *= 1.3
+            elif "weak-reasoning" in capabilities.tags:
+                base_score *= 0.4
+
+        # Rule 3: If rate limited, prefer a different provider
+        if failure_type == "rate_limit":
+            # Assuming provider info is available in metadata or if we can infer it
+            # For now, let's just check if they have different tags that might imply different infra
+            pass
+
+        return max(0.0, min(1.0, base_score))
     
     async def determine_parallelism(self, subtasks: List[Subtask]) -> ExecutionPlan:
         """Determine which subtasks can be executed in parallel.
@@ -249,6 +292,12 @@ class ModelContextProtocolImpl(ModelContextProtocol):
             latency_score = max(0, 1.0 - capabilities.average_latency / 10.0)  # Normalize latency
             score = score * 0.8 + latency_score * 0.2
         
+        # Tag-based scoring (general)
+        if "premium" in capabilities.tags and subtask.accuracy_requirement > 0.9:
+            score *= 1.1
+        if "legacy" in capabilities.tags:
+            score *= 0.8
+            
         return max(0.0, min(1.0, score))
     
     def _generate_routing_reasoning(self, model, subtask: Subtask, score: float) -> str:

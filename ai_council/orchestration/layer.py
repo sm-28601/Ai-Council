@@ -822,7 +822,7 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
                 subtask = self._get_subtask_by_id(failure.subtask_id)
                 if subtask:
                     fallback_selection = await self.model_context_protocol.select_fallback(
-                        failure.model_id, subtask
+                        failure.model_id, subtask, failure_context=getattr(failure, 'context', None)
                     )
                     return FallbackStrategy(
                         strategy_type="alternative_model",

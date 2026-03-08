@@ -111,6 +111,7 @@ class RecoveryAction:
     degraded_mode: bool = False
     skip_subtask: bool = False
     error_message: Optional[str] = None
+    failure_context: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -457,10 +458,12 @@ class ModelUnavailableHandler(FailureHandler):
             action_type="fallback_model",
             should_retry=True,
             fallback_model=fallback_model,
+            failure_context=failure.context,
             metadata={
                 "original_model": model_id,
                 "fallback_model": fallback_model,
-                "available_fallbacks": fallback_models
+                "available_fallbacks": fallback_models,
+                "failure_type": failure.failure_type.value
             }
         )
 

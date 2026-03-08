@@ -123,12 +123,13 @@ class ModelContextProtocol(ABC):
         pass
     
     @abstractmethod
-    async def select_fallback(self, failed_model: str, subtask: Subtask) -> ModelSelection:
+    async def select_fallback(self, failed_model: str, subtask: Subtask, failure_context: Optional[Dict[str, Any]] = None) -> ModelSelection:
         """Select a fallback model when the primary model fails.
         
         Args:
             failed_model: ID of the model that failed
             subtask: The subtask that needs a fallback model
+            failure_context: Optional context about the failure
             
         Returns:
             ModelSelection: The fallback model selection

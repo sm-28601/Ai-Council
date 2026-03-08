@@ -219,6 +219,7 @@ class ModelCapabilities:
     reliability_score: float = 0.0
     strengths: List[str] = field(default_factory=list)
     weaknesses: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Validate model capabilities after initialization."""
