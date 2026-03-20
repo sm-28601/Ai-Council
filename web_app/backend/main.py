@@ -95,7 +95,7 @@ else:
     load_dotenv()
 
 # CORS configuration
-env = os.getenv("ENVIRONMENT", "production").lower()
+env = os.getenv("ENVIRONMENT", "production").strip().lower()
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "")
 if allowed_origins_str:
     allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
