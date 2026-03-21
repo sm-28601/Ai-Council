@@ -639,7 +639,8 @@ class BaseExecutionAgent(ExecutionAgent):
         # Use regex word boundaries and strictly self-referential phrases
         uncertainty_patterns = [
             r"\bi'm not sure\b", r"\bi am not sure\b", 
-            r"\bi think\b", r"\bi don't know\b", r"\bi do not know\b",
+            r"\bi think\s+(?:but|though|however|but i'm not sure|though i'm not sure)\b", 
+            r"\bi don't know\b", r"\bi do not know\b",
             r"\bit is unclear to me\b", r"\bi am uncertain\b", r"\bi'm uncertain\b",
             r"\bi am not confident\b", r"\bi'm not confident\b"
         ]
@@ -708,8 +709,9 @@ class BaseExecutionAgent(ExecutionAgent):
             r"\bpresuming\b", r"\btaking for granted\b", r"\bbased on the assumption\b"
         ]
         
-        # Split by periods, exclamation marks, question marks, or newlines
-        sentences = re.split(r'[.!?\n]+', response)
+        # Split by punctuation or newlines, but use negative lookbehinds to protect 
+        split_pattern = r'(?<!\d)(?<!\bDr)(?<!\bMr)(?<!\bMs)(?<!\bvs)(?<!\be\.g)(?<!\bi\.e)(?<!\bMrs)(?<!\betc)[.!?]+(?:\s+|\n+)|\n+'
+        sentences = re.split(split_pattern, response)
         
         for sentence in sentences:
             sentence_lower = sentence.lower().strip()
