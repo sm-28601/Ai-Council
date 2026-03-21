@@ -1,6 +1,7 @@
 """Execution agent implementation for AI Council."""
 
 import time
+import re
 from ai_council.core.logger import get_logger
 import asyncio
 from typing import Optional, Dict, Any
@@ -632,24 +633,28 @@ class BaseExecutionAgent(ExecutionAgent):
             confidence += 0.2
         elif response_length < 10:
             confidence -= 0.3
+            
+        response_lower = response.lower()
         
-        # Check for uncertainty indicators
-        uncertainty_phrases = [
-            "i'm not sure", "i think", "maybe", "possibly", "might be",
-            "i don't know", "unclear", "uncertain", "not confident"
+        # Use regex word boundaries and strictly self-referential phrases
+        uncertainty_patterns = [
+            r"\bi'm not sure\b", r"\bi am not sure\b", 
+            r"\bi think\b", r"\bi don't know\b", r"\bi do not know\b",
+            r"\bit is unclear to me\b", r"\bi am uncertain\b", r"\bi'm uncertain\b",
+            r"\bi am not confident\b", r"\bi'm not confident\b"
         ]
         
-        response_lower = response.lower()
-        uncertainty_count = sum(1 for phrase in uncertainty_phrases if phrase in response_lower)
+        uncertainty_count = sum(len(re.findall(pattern, response_lower)) for pattern in uncertainty_patterns)
         confidence -= min(0.3, uncertainty_count * 0.1)
         
-        # Check for confidence indicators
-        confidence_phrases = [
-            "definitely", "certainly", "clearly", "obviously", "without doubt",
-            "confirmed", "verified", "established"
+        # Apply word boundaries to confidence indicators
+        confidence_patterns = [
+            r"\bdefinitely\b", r"\bcertainly\b", r"\bclearly\b", r"\bobviously\b", 
+            r"\bwithout doubt\b", r"\bwithout a doubt\b", r"\bconfirmed\b", 
+            r"\bverified\b", r"\bestablished\b"
         ]
         
-        confidence_count = sum(1 for phrase in confidence_phrases if phrase in response_lower)
+        confidence_count = sum(len(re.findall(pattern, response_lower)) for pattern in confidence_patterns)
         confidence += min(0.2, confidence_count * 0.05)
         
         # Ensure confidence is within bounds
@@ -697,22 +702,22 @@ class BaseExecutionAgent(ExecutionAgent):
         """
         assumptions = []
         
-        # Look for assumption indicators
+        # Use regex word boundaries to prevent partial matches
         assumption_patterns = [
-            "assuming", "given that", "if we assume", "presuming",
-            "taking for granted", "based on the assumption"
+            r"\bassuming\b", r"\bgiven that\b", r"\bif we assume\b", 
+            r"\bpresuming\b", r"\btaking for granted\b", r"\bbased on the assumption\b"
         ]
         
-        response_lower = response.lower()
-        sentences = response.split('.')
+        # Split by periods, exclamation marks, question marks, or newlines
+        sentences = re.split(r'[.!?\n]+', response)
         
         for sentence in sentences:
             sentence_lower = sentence.lower().strip()
             for pattern in assumption_patterns:
-                if pattern in sentence_lower:
+                if re.search(pattern, sentence_lower):
                     # Clean up the assumption text
                     assumption = sentence.strip()
-                    if assumption and len(assumption) > 10:
+                    if assumption and len(assumption) > 15:
                         assumptions.append(assumption)
                     break
         
