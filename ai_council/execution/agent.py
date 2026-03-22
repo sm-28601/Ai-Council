@@ -430,9 +430,14 @@ class BaseExecutionAgent(ExecutionAgent):
         if hasattr(model, 'metadata') and isinstance(model.metadata, dict):
             provider = model.metadata.get("provider")
             if provider:
-                return str(provider).lower()
+                normalized = str(provider).strip().lower()
                 
-        # Fallback if metadata is missing or provider is not specified
+                # Verify the provider is actually configured in the rate limiter
+                configured_limits = getattr(rate_limit_manager, "rate_limits", {})
+                if normalized and normalized in configured_limits:
+                    return normalized
+                    
+        # Fallback if metadata is missing, provider is not specified, or unconfigured
         return "default"
     
     async def generate_self_assessment(self, response: str, subtask: Subtask, model_id: str) -> SelfAssessment:
