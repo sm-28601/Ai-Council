@@ -51,13 +51,21 @@ class BaseExecutionAgent(ExecutionAgent):
             "model_api", api_cb_config
         )
         
-        rate_limits = {}
+        default_limits = {"openai": 60, "anthropic": 50, "default": 30}
 
-        if self.model_registry and hasattr(self.model_registry, "rate_limits"):
-            rate_limits = self.model_registry.rate_limits
-        rate_limit_manager.set_rate_limit("openai", rate_limits.get("openai", 60))
-        rate_limit_manager.set_rate_limit("anthropic", rate_limits.get("anthropic", 50))
-        rate_limit_manager.set_rate_limit("default", rate_limits.get("default", 30))
+        raw_limits = getattr(self.model_registry, "rate_limits", None) if self.model_registry else None
+        configured_limits = raw_limits if isinstance(raw_limits, dict) else {}
+
+        for provider, fallback in default_limits.items():
+            value = configured_limits.get(provider, fallback)
+            try:
+                rpm = int(value)
+                if rpm <= 0:
+                    rpm = fallback
+            except (TypeError, ValueError):
+                rpm = fallback
+
+            rate_limit_manager.set_rate_limit(provider, rpm)
 
     def _count_tokens(self, text: str) -> int:
         """Estimate tokens using simple logic (for tests)."""
