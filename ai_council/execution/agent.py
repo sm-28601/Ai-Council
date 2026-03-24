@@ -133,6 +133,7 @@ class BaseExecutionAgent(ExecutionAgent):
                 adaptive_timeout_manager.record_execution_time("model_execution", execution_time)
                 
                 # Create successful response
+                prompt = self._build_prompt(subtask)
                 agent_response = AgentResponse(
                     subtask_id=subtask.id,
                     model_used=model_id,
@@ -143,7 +144,7 @@ class BaseExecutionAgent(ExecutionAgent):
                     metadata={
                         "attempts": attempt + 1,
                         "execution_time": execution_time,
-                        "prompt_length": sum(len(m.get("content", "")) for m in self._build_prompt(subtask)) if isinstance(self._build_prompt(subtask), list) else len(self._build_prompt(subtask)),
+                        "prompt_length": sum(len(m.get("content", "")) for m in prompt) if isinstance(prompt, list) else len(prompt),
                         "recovery_action": recovery_action.action_type if recovery_action else None
                     }
                 )
@@ -255,10 +256,7 @@ class BaseExecutionAgent(ExecutionAgent):
         
         # Note: If your underlying AIModel expects a string, keep this if/else.
         # If your AIModel has been updated to accept a list natively, you can just pass 'prompt' directly.
-        if isinstance(prompt, list):
-            prompt_payload = "\n".join([f"{m['role']}: {m['content']}" for m in prompt])
-        else:
-            prompt_payload = prompt
+        prompt_payload = self._flatten_prompt(prompt)
 
         return await model.generate_response(
             prompt=prompt_payload,
@@ -545,11 +543,25 @@ class BaseExecutionAgent(ExecutionAgent):
         """Build prompt as structured messages (LLM compatible)."""
 
         messages = []
+
+        # Combine system prompt + task instructions
+        system_content = []
+
         if hasattr(subtask, "system_prompt") and subtask.system_prompt:
+            system_content.append(subtask.system_prompt)
+
+        if subtask.task_type:
+            task_instructions = self._get_task_type_instructions(subtask.task_type)
+            if task_instructions:
+                system_content.append(task_instructions)
+
+        if system_content:
             messages.append({
                 "role": "system",
-                "content": subtask.system_prompt
+                "content": "\n".join(system_content)
             })
+
+        # Add history
         if hasattr(subtask, "history") and subtask.history:
             for msg in subtask.history:
                 if isinstance(msg, dict) and "role" in msg and "content" in msg:
@@ -557,17 +569,13 @@ class BaseExecutionAgent(ExecutionAgent):
                         "role": msg["role"],
                         "content": msg["content"]
                     })
-        if subtask.task_type:
-            task_instructions = self._get_task_type_instructions(subtask.task_type)
-            if task_instructions:
-                messages.append({
-                    "role": "system",
-                    "content": task_instructions
-                })
+
+        # Add user message
         messages.append({
             "role": "user",
             "content": subtask.content
         })
+
         return messages
     
     def _get_task_type_instructions(self, task_type) -> Optional[str]:
@@ -826,11 +834,8 @@ class BaseExecutionAgent(ExecutionAgent):
         """
 
         prompt = self._build_prompt(subtask)
+        prompt_text = self._flatten_prompt(prompt)
 
-        if isinstance(prompt, list):
-            prompt_text = "\n".join([f"{m['role']}: {m['content']}" for m in prompt])
-        else:
-            prompt_text = prompt
         input_tokens = max(1, self._count_tokens(prompt_text))
         output_tokens = max(1, self._count_tokens(response))
         
