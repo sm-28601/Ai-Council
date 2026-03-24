@@ -123,23 +123,23 @@ class TaskTrackingMiddleware(BaseHTTPMiddleware):
 
 def check_shutdown_status(request: Request):
     """Dependency to reject new requests if the server is shutting down."""
-    if request.app.state.is_shutting_down.is_set():
+    if hasattr(request.app.state, "is_shutting_down") and request.app.state.is_shutting_down.is_set():
         raise HTTPException(status_code=503, detail="Server is currently shutting down. Please try again later.")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize AI Council on startup and handle graceful shutdown."""
+    """Initialize AI Council on startup."""
     try:
+        app.state.is_shutting_down = asyncio.Event()
+        app.state.task_manager = TaskManager()
         config_path = Path(__file__).parent.parent.parent / "config" / "ai_council.yaml"
         if config_path.exists():
             os.environ["AI_COUNCIL_CONFIG"] = str(config_path)
 
         app.state.ai_council = AICouncil(config_path if config_path.exists() else None)
         print("[OK] AI Council initialized successfully")
-        
         yield
-        
     except RuntimeError as exc:
         if "Configuration validation failed" in str(exc):
             print("\n" + "=" * 60)
@@ -147,17 +147,17 @@ async def lifespan(app: FastAPI):
             print("=" * 60)
             print(str(exc).replace("Configuration validation failed:", "").strip())
             print("=" * 60 + "\n")
-        else:
-            print(f"[ERROR] Failed to initialize AI Council: {str(exc)}")
+            raise
+        print(f"[ERROR] Failed to initialize AI Council: {str(exc)}")
         raise
-
-    except Exception as exc:
-        print(f"[ERROR] AI Council lifecycle error: {str(exc)}")
+    except Exception as exc:  # pragma: no cover - defensive startup logging
+        print(f"[ERROR] Failed to initialize AI Council: {str(exc)}")
         raise
 
     finally:
         print("\n[INFO] Initiating graceful shutdown sequence...")
-        app.state.is_shutting_down.set()
+        if hasattr(app.state, "is_shutting_down"):
+            app.state.is_shutting_down.set()
         
         print("[INFO] Waiting for in-flight tasks to complete...")
         await app.state.task_manager.wait_for_completion(timeout=15.0)
@@ -181,7 +181,6 @@ async def lifespan(app: FastAPI):
         print("[OK] Graceful shutdown complete.")
 
 
-# Existing FastAPI app initialization (no change, just uses updated lifespan)
 app = FastAPI(title="AI Council API", version="1.0.0", lifespan=lifespan)
 
 # Load environment variables
@@ -326,6 +325,7 @@ async def get_status(ai_council: AICouncil = Depends(get_ai_council)):
 @app.post("/api/process", dependencies=[Depends(check_shutdown_status)])
 @limiter.limit("100/15minutes")
 async def process_request(request: Request, req: RequestModel, ai_council: AICouncil = Depends(get_ai_council)):
+    del request  # used by limiter decorator
     try:
         mode = normalize_mode(req.mode)
         response = await maybe_await(ai_council.process_request(req.query, mode))
@@ -359,8 +359,7 @@ class WebSocketManager:
         self.active_sockets: Set[WebSocket] = set()
         self.ip_connections: Dict[str, int] = {}
         self.message_timestamps: Dict[WebSocket, List[float]] = {}
-        self.active_connections_set = set()  # NEW: Track active WebSocket connections
-        
+        self.active_connections = 0
 
         self.MAX_CONNECTIONS = 1000
         self.MAX_IP_CONNECTIONS = 10
@@ -402,18 +401,17 @@ class WebSocketManager:
         self.active_sockets.add(websocket)
         self.ip_connections[client_ip] = current_ip_count + 1
         self.message_timestamps[websocket] = []
-
         return True
 
     def disconnect(self, websocket: WebSocket, client_ip: str):
         self.active_sockets.discard(websocket)
         if websocket in self.message_timestamps:
             del self.message_timestamps[websocket]
-            
-        if client_ip in self.ip_connections:
-            self.ip_connections[client_ip] = max(0, self.ip_connections[client_ip] - 1)
-            if self.ip_connections[client_ip] == 0:
-                del self.ip_connections[client_ip]
+            self.active_connections = max(0, self.active_connections - 1)
+            if client_ip in self.ip_connections:
+                self.ip_connections[client_ip] = max(0, self.ip_connections[client_ip] - 1)
+                if self.ip_connections[client_ip] == 0:
+                    del self.ip_connections[client_ip]
 
     def check_rate_limit(self, websocket: WebSocket) -> bool:
         """Returns True if limits are exceeded."""
