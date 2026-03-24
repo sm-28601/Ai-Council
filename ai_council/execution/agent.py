@@ -51,10 +51,13 @@ class BaseExecutionAgent(ExecutionAgent):
             "model_api", api_cb_config
         )
         
-        # Set up rate limits for common model providers
-        rate_limit_manager.set_rate_limit("openai", 60)  # 60 requests per minute
-        rate_limit_manager.set_rate_limit("anthropic", 50)  # 50 requests per minute
-        rate_limit_manager.set_rate_limit("default", 30)  # Default rate limit
+        rate_limits = {}
+
+        if self.model_registry and hasattr(self.model_registry, "rate_limits"):
+            rate_limits = self.model_registry.rate_limits
+        rate_limit_manager.set_rate_limit("openai", rate_limits.get("openai", 60))
+        rate_limit_manager.set_rate_limit("anthropic", rate_limits.get("anthropic", 50))
+        rate_limit_manager.set_rate_limit("default", rate_limits.get("default", 30))
 
     def _count_tokens(self, text: str) -> int:
         """Estimate tokens using simple logic (for tests)."""
